@@ -1,0 +1,34 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+
+# Run directory (Minecraft dev server)
+run/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Maven publish
+repo/
+
+# Minecraft assets
+src/generated/
+
+# Environment-specific
+*.local
