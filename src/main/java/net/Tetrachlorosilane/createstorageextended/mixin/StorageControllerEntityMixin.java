@@ -16,13 +16,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.UUID;
 
-/**
- * Mixin into {@link StorageControllerEntity} to implement {@link INetworkComponent}
- * and add persistent network ID support.
- * <p>
- * NBT persistence for network ID is handled by {@link BlockEntityNetworkMixin}
- * to avoid issues with classes that don't override saveAdditional/loadAdditional.
- */
 @Mixin(value = StorageControllerEntity.class, remap = false)
 public abstract class StorageControllerEntityMixin implements INetworkComponent {
 
@@ -41,11 +34,6 @@ public abstract class StorageControllerEntityMixin implements INetworkComponent 
     @Override
     public void setStorageNetworkId(@Nullable UUID networkId) {
         this.createstorageextended$networkId = networkId;
-    }
-
-    @Override
-    public BlockPos getComponentPos() {
-        return ((StorageControllerEntity) (Object) this).getBlockPos();
     }
 
     @Inject(method = "serverTick", at = @At("HEAD"), remap = false)

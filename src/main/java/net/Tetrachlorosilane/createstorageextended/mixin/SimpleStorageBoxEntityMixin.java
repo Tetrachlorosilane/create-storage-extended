@@ -5,7 +5,6 @@ import net.Tetrachlorosilane.createstorageextended.network.StorageNetworkManager
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
@@ -16,10 +15,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.UUID;
 
-/**
- * Mixin into SimpleStorageBoxEntity to implement {@link INetworkComponent}.
- * NBT persistence is handled by {@link BlockEntityNetworkMixin}.
- */
 @Mixin(targets = "net.fxnt.fxntstorage.simple_storage.SimpleStorageBoxEntity", remap = false)
 public abstract class SimpleStorageBoxEntityMixin implements INetworkComponent {
 
@@ -38,11 +33,6 @@ public abstract class SimpleStorageBoxEntityMixin implements INetworkComponent {
     @Override
     public void setStorageNetworkId(@Nullable UUID networkId) {
         this.createstorageextended$networkId = networkId;
-    }
-
-    @Override
-    public BlockPos getComponentPos() {
-        return ((BlockEntity) (Object) this).getBlockPos();
     }
 
     @Inject(method = "serverTick", at = @At("HEAD"), remap = false)
