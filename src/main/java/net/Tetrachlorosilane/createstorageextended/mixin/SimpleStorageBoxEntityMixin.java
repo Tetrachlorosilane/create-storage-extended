@@ -27,6 +27,9 @@ public abstract class SimpleStorageBoxEntityMixin implements INetworkComponent {
     @Nullable
     private UUID createstorageextended$networkId;
 
+    @Unique
+    private boolean createstorageextended$registered;
+
     @Override
     public UUID getStorageNetworkId() {
         return createstorageextended$networkId;
@@ -44,7 +47,8 @@ public abstract class SimpleStorageBoxEntityMixin implements INetworkComponent {
 
     @Inject(method = "serverTick", at = @At("HEAD"), remap = false)
     private void onServerTick(Level level, BlockPos blockPos, BlockState state, CallbackInfo ci) {
-        if (!level.isClientSide() && level instanceof ServerLevel serverLevel && createstorageextended$networkId != null) {
+        if (!createstorageextended$registered && !level.isClientSide() && level instanceof ServerLevel serverLevel && createstorageextended$networkId != null) {
+            createstorageextended$registered = true;
             StorageNetworkManager.getInstance().registerComponent(serverLevel, blockPos, createstorageextended$networkId);
         }
     }
