@@ -78,9 +78,9 @@ Network Query ──→ StorageNetworkMixin intercepts getConnectedComponents
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `debugLogging` | boolean | `false` | Enable detailed topology operation logging |
+| `debugLogging` | boolean | `false` | Enable detailed topology operation logging (network creation, joins, merges, splits, id corrections) |
 
-Note: Log level can also be controlled via standard Log4j configuration.
+Note: Diagnostics are logged at DEBUG level - in addition to this option, the mod log4j level must allow DEBUG output for the messages to appear.
 
 ---
 
