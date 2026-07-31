@@ -43,8 +43,9 @@ public class StorageNetworkData extends SavedData {
     }
 
     public void createNetwork(UUID id) {
-        networks.putIfAbsent(id, new LinkedHashSet<>());
-        setDirty();
+        if (networks.putIfAbsent(id, new LinkedHashSet<>()) == null) {
+            setDirty();
+        }
     }
 
     public void addToNetwork(UUID networkId, BlockPos pos) {
