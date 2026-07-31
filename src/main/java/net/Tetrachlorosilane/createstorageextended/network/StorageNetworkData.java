@@ -13,10 +13,6 @@ import java.util.*;
 
 /**
  * World-level persisted data that stores all storage network topologies.
- * <p>
- * Each network is identified by a unique {@link UUID}.
- * The data maps network UUID -> {@link NetworkState} (set of member BlockPos),
- * and also maintains a reverse lookup BlockPos -> network UUID for O(1) access.
  */
 public class StorageNetworkData extends SavedData {
 
@@ -30,8 +26,6 @@ public class StorageNetworkData extends SavedData {
     // block position -> network UUID (reverse lookup)
     private final Map<BlockPos, UUID> blockToNetwork = new HashMap<>();
 
-    // ========== SavedData factory ==========
-
     public static StorageNetworkData get(ServerLevel level) {
         return level.getDataStorage().computeIfAbsent(
                 new Factory<>(StorageNetworkData::new, StorageNetworkData::load, null),
@@ -41,9 +35,6 @@ public class StorageNetworkData extends SavedData {
 
     // ========== Network CRUD ==========
 
-    /**
-     * Create a new network with a fresh UUID and no members.
-     */
     public UUID createNetwork() {
         UUID id = UUID.randomUUID();
         networks.put(id, new LinkedHashSet<>());
@@ -51,21 +42,15 @@ public class StorageNetworkData extends SavedData {
         return id;
     }
 
-    /**
-     * Create a network with a specific UUID (used when restoring from NBT).
-     */
     public void createNetwork(UUID id) {
-        networks.putIfAbsent(id, new LinkedHashSet<>());
-        setDirty();
+        if (networks.putIfAbsent(id, new LinkedHashSet<>()) == null) {
+            setDirty();
+        }
     }
 
-    /**
-     * Add a block position to an existing network.
-     */
     public void addToNetwork(UUID networkId, BlockPos pos) {
-        // Remove from any existing network first
         UUID oldNetwork = blockToNetwork.get(pos);
-        if (oldNetwork != null && oldNetwork.equals(networkId)) return; // already in this network
+        if (oldNetwork != null && oldNetwork.equals(networkId)) return;
 
         removeFromNetwork(pos);
 
@@ -74,10 +59,6 @@ public class StorageNetworkData extends SavedData {
         setDirty();
     }
 
-    /**
-     * Remove a block from its network. If the network becomes empty, it is NOT deleted
-     * (empty networks can exist temporarily during merges).
-     */
     public void removeFromNetwork(BlockPos pos) {
         UUID networkId = blockToNetwork.remove(pos);
         if (networkId != null) {
@@ -89,9 +70,6 @@ public class StorageNetworkData extends SavedData {
         }
     }
 
-    /**
-     * Delete an entire network and remove all its members from the reverse lookup.
-     */
     public void deleteNetwork(UUID networkId) {
         Set<BlockPos> members = networks.remove(networkId);
         if (members != null) {
@@ -102,9 +80,6 @@ public class StorageNetworkData extends SavedData {
         }
     }
 
-    /**
-     * Move all members from {@code sourceId} into {@code targetId}, then delete the source.
-     */
     public Set<BlockPos> mergeNetworks(UUID sourceId, UUID targetId) {
         Set<BlockPos> sourceMembers = networks.get(sourceId);
         if (sourceMembers == null) return Collections.emptySet();
@@ -130,23 +105,13 @@ public class StorageNetworkData extends SavedData {
 
     public Set<BlockPos> getNetworkMembers(UUID networkId) {
         Set<BlockPos> members = networks.get(networkId);
-        return members != null ? Collections.unmodifiableSet(members) : Collections.emptySet();
-    }
-
-    @Nullable
-    public UUID findAdjacentNetwork(ServerLevel level, BlockPos pos) {
-        for (var dir : net.minecraft.core.Direction.values()) {
-            BlockPos neighbor = pos.relative(dir);
-            UUID id = blockToNetwork.get(neighbor);
-            if (id != null) return id;
-        }
-        return null;
+        return members != null ? Set.copyOf(members) : Set.of();
     }
 
     /**
      * Return all networks that are adjacent to the given position.
      */
-    public Set<UUID> findAllAdjacentNetworks(ServerLevel level, BlockPos pos) {
+    public Set<UUID> findAllAdjacentNetworks(BlockPos pos) {
         Set<UUID> result = new LinkedHashSet<>();
         for (var dir : net.minecraft.core.Direction.values()) {
             BlockPos neighbor = pos.relative(dir);
@@ -154,14 +119,6 @@ public class StorageNetworkData extends SavedData {
             if (id != null) result.add(id);
         }
         return result;
-    }
-
-    public Map<UUID, Set<BlockPos>> getAllNetworks() {
-        return Collections.unmodifiableMap(networks);
-    }
-
-    public boolean isNetworkComponent(BlockPos pos) {
-        return blockToNetwork.containsKey(pos);
     }
 
     // ========== Persistence ==========

@@ -1,101 +1,86 @@
 # Create: Storage Extended
 
-> A server-side companion mod for [Create: Storage](https://github.com/Creators-of-Create/Create) that replaces the original BFS-based storage network discovery with a persistent, event-driven topology system.
+> A server-side companion mod for [Create: Storage](https://modrinth.com/mod/create-storage-neo-forge) that replaces the original BFS-based storage network discovery with a persistent, event-driven topology system.
 
 ---
 
 ## What This Mod Does
 
-**Create: Storage Extended** injects into fxntstorage's storage network system and fundamentally changes how networks are discovered, maintained, and persisted.
-
-### Before (vanilla Create: Storage)
-
-- Storage networks are rediscovered every 20 ticks via BFS flood-fill (6-direction neighbor scan)
-- Network topology is **not saved** — it's recomputed from scratch on every tick and on world reload
-- There is no unique network identifier — components find each other by scanning neighbors
-- Interfaces hold a direct Java reference to the controller, which breaks on chunk unload
-- When a network changes, it takes up to 20 ticks before the change is reflected
-
-### After (with this mod)
-
-| Feature | Description |
+| Original (fxntstorage) | Extended |
 |---|---|
-| **Persistent topology** | Network members are saved to world-level `SavedData`. On reload, the network is restored instantly without BFS. |
-| **Unique network ID** | Every network receives a `java.util.UUID`. Each component persists the UUID in its NBT. |
-| **O(1) component lookup** | Given any component's position, `StorageNetworkManager.getNetworkMembers()` returns the full set instantly. |
-| **Event-driven updates** | Block placement → join/merge network. Block removal → split network via connectivity BFS. No periodic scanning. |
-| **Controller-independent topology** | The network exists independently of any controller block. Breaking a controller does not split the network — interfaces simply lose their reference until a controller is placed again. |
-| **Unload-safe** | The topology is saved independently of chunk loading. Querying a network from unloaded chunks returns correct data. |
-| **Storage Trim support** | Blocks with the `fxntstorage:storage_network_block` tag (including Storage Trim) act as network connectors even though they don't implement `INetworkComponent`. |
+| BFS rediscovery every 20 ticks | Event-driven: `Level.setBlock` hook catches all changes |
+| Network topology not saved | World `SavedData` persists full topology |
+| No unique network ID | Every network has a persistent `UUID` |
+| Controller-dependent topology | Pure connectivity — breaking a controller does not split |
+| Interfaces hold direct Java refs | UUID-based lookup via `StorageNetworkManager` |
+| Chunk unload breaks references | SavedData independent of chunk loading |
 
 ---
 
 ## Dependencies
 
-| Mod | Version | Required |
-|---|---|---|
-| [NeoForge](https://neoforged.net) | 21.1.181+ | Yes |
-| [Create](https://modrinth.com/mod/create) | 6.0.7+ | Yes |
-| [Create: Storage](https://modrinth.com/mod/create-storage-neo-forge) | 1.3+ | Yes |
+| Mod | Version |
+|---|---|
+| NeoForge | 21.1+ |
+| Create | 6.0.7+ |
+| Create: Storage (fxntstorage) | 1.3+ |
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ```
-create-storage-extended/
+src/main/java/net/Tetrachlorosilane/createstorageextended/
+├── CreateStorageExtended.java          # Mod entry point
+├── Config.java                         # debugLogging toggle
 ├── network/
-│   ├── StorageNetworkData.java     # World SavedData — persists all network topologies
-│   ├── StorageNetworkManager.java  # Singleton managing network lifecycle (place/break/merge/split)
-│   └── INetworkComponent.java      # Interface implemented by all network components
+│   ├── StorageNetworkData.java         # World SavedData (persisted topology)
+│   ├── StorageNetworkManager.java      # Singleton: place/remove/merge/split
+│   └── INetworkComponent.java          # BE interface: get/setStorageNetworkId
 ├── mixin/
-│   ├── BlockEntityNetworkMixin.java        # Universal NBT persistence for all INetworkComponent BEs
-│   ├── StorageControllerEntityMixin.java   # Adds networkId field + registration tick
-│   ├── StorageInterfaceEntityMixin.java    # Adds networkId field + registration tick
-│   ├── SimpleStorageBoxEntityMixin.java    # Adds networkId field + NBT + registration tick
-│   └── StorageNetworkMixin.java            # Replaces BFS with persisted-data lookup (O(1))
-├── event/
-│   └── NetworkEventHandler.java   # BlockEvent.EntityPlaceEvent / BreakEvent → network update
-└── Config.java                    # Debug logging and BFS search range
+│   ├── BlockEntityNetworkMixin.java    # Universal NBT persistence for all components
+│   ├── LevelSetBlockMixin.java         # Hooks Level.setBlock → handles ALL block changes
+│   ├── StorageControllerEntityMixin.java
+│   ├── StorageInterfaceEntityMixin.java
+│   ├── SimpleStorageBoxEntityMixin.java
+│   └── StorageNetworkMixin.java        # Replaces BFS with SavedData lookup
 ```
 
 ### Data Flow
 
 ```
-Block Place ──→ NetworkEventHandler.onBlockPlaced
-                 ├── be instanceof INetworkComponent? → read existingId
-                 ├── block has storage_network_block tag? → treat as connector
-                 └── StorageNetworkManager.onBlockPlaced
-                       ├── findAllAdjacentNetworks (6 neighbors)
-                       ├── 0 → createNetwork() (new UUID)
-                       ├── 1 → addToNetwork()
-                       └── 2+ → mergeNetworks() + updateComponentId() on all merged members
+Block Placed ──→ Level.setBlock (old=air, new=network_block)
+                 └── LevelSetBlockMixin.onSetBlock
+                       └── StorageNetworkManager.onBlockPlaced → neighbor merge + join
 
-Block Break ──→ NetworkEventHandler.onBlockBroken
-                 └── StorageNetworkManager.onBlockRemoved
-                       ├── removeFromNetwork()
-                       ├── findConnectedGroups (BFS on remaining members)
-                       ├── 1 group → network intact, nothing to do
-                       └── 2+ groups → keep first with old ID, create new IDs for others
-                             └── updateComponentId() on all split members
+Block Removed ──→ Level.setBlock (old=network_block, new=air)
+                   └── LevelSetBlockMixin.onSetBlock
+                         └── StorageNetworkManager.onBlockRemoved → split detection
 
-World Load ──→ BlockEntityNetworkMixin.loadAdditional
-                 ├── Save key "StorageNetworkId" → UUID
-                 └── StorageNetworkManager.registerComponent()
+World Load ──→ BlockEntityNetworkMixin.loadAdditional → registerComponent
+               └── SavedData authoritative check → corrects stale UUIDs
 
-Network Query ──→ StorageNetworkMixin intercepts getConnectedComponents()
-                   ├── controller has networkId? → StorageNetworkManager.getNetworkMembers() (O(1))
-                   └── no networkId? → fall back to original BFS
+Network Query ──→ StorageNetworkMixin intercepts getConnectedComponents
+                   └── StorageNetworkManager.getNetworkMembers (O(1) from SavedData)
 ```
+
+### Key Behaviors
+
+- **Merges**: Block placed between two networks → `findAllAdjacentNetworks` detects both → merges all into one UUID → updates all affected BEs.
+- **Splits**: Block removed → `findConnectedGroups` runs pure positional BFS on remaining members → each disconnected group becomes its own network.
+- **Stale UUIDs**: When a chunk loads with an old NBT UUID, `registerComponent` checks `StorageNetworkData` first — SavedData is authoritative, BE is corrected.
+- **Empty networks**: Deleted when last member removed, skipped during save.
+- **Storage Trim**: Supported via `fxntstorage:storage_network_block` tag (no `INetworkComponent` needed — topology lives in SavedData).
 
 ---
 
 ## Configuration
 
-| Config Key | Type | Default | Description |
+| Key | Type | Default | Description |
 |---|---|---|---|
-| `debugLogging` | boolean | `false` | Enable detailed logging of network operations |
-| `networkSearchRange` | int (8–128) | `32` | Maximum BFS range for split detection |
+| `debugLogging` | boolean | `false` | Enable detailed topology operation logging (network creation, joins, merges, splits, id corrections) |
+
+Note: Diagnostics are logged at DEBUG level - in addition to this option, the mod log4j level must allow DEBUG output for the messages to appear.
 
 ---
 
