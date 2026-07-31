@@ -104,7 +104,7 @@ public class StorageNetworkData extends SavedData {
 
     public Set<BlockPos> getNetworkMembers(UUID networkId) {
         Set<BlockPos> members = networks.get(networkId);
-        return members != null ? Collections.unmodifiableSet(members) : Collections.emptySet();
+        return members != null ? Set.copyOf(members) : Set.of();
     }
 
     /**
