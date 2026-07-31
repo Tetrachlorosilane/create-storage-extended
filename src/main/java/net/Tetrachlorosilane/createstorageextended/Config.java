@@ -15,24 +15,16 @@ public class Config {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
     public static final ModConfigSpec.BooleanValue DEBUG_LOGGING = BUILDER
-            .comment("Enable detailed debug logging for storage network operations.")
+            .comment("Enable detailed debug logging for storage network operations. "
+                    + "Log level can also be controlled via standard Log4j configuration.")
             .define("debugLogging", false);
-
-    public static final ModConfigSpec.IntValue NETWORK_SEARCH_RANGE = BUILDER
-            .comment("Maximum BFS range for network component discovery during split operations.")
-            .defineInRange("networkSearchRange", 32, 8, 128);
 
     static final ModConfigSpec SPEC = BUILDER.build();
 
     public static boolean debugLogging;
-    public static int networkSearchRange;
 
-    /**
-     * Called by {@link CreateStorageExtended} via the mod event bus.
-     */
     static void onLoad(final ModConfigEvent event) {
         debugLogging = DEBUG_LOGGING.get();
-        networkSearchRange = NETWORK_SEARCH_RANGE.get();
     }
 
     public static void register(IEventBus modEventBus) {
