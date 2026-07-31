@@ -6,7 +6,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -38,16 +37,12 @@ public class StorageNetworkManager {
 
     // ========== Block Placement ==========
 
-    /**
-     * Called when a network-capable block is placed in the world.
-     * @return the UUID of the network the block was placed into, or null
-     */
     @Nullable
-    public UUID onBlockPlaced(Level level, BlockPos pos, BlockState state, @Nullable UUID existingId) {
+    public UUID onBlockPlaced(Level level, BlockPos pos, @Nullable UUID existingId) {
         if (!(level instanceof ServerLevel serverLevel)) return null;
 
         StorageNetworkData data = getData(serverLevel);
-        Set<UUID> adjacentIds = data.findAllAdjacentNetworks(serverLevel, pos);
+        Set<UUID> adjacentIds = data.findAllAdjacentNetworks(pos);
 
         UUID targetId;
         if (adjacentIds.isEmpty()) {
@@ -69,7 +64,6 @@ public class StorageNetworkManager {
                 UUID otherId = iter.next();
                 if (!otherId.equals(targetId)) {
                     Set<BlockPos> mergedMembers = data.mergeNetworks(otherId, targetId);
-                    // Update all block entities in the merged source network to point to targetId
                     for (BlockPos memberPos : mergedMembers) {
                         updateComponentId(level, memberPos, targetId);
                     }
@@ -85,20 +79,8 @@ public class StorageNetworkManager {
 
     // ========== Block Removal ==========
 
-    /**
-     * Called when a network-capable block is removed from the world.
-     * <p>
-     * The network topology does NOT depend on any specific block type
-     * (e.g. a controller is not required for the network to exist — only
-     * interfaces depend on controllers for item access).
-     * <p>
-     * Removal uses pure connectivity BFS: if splitting the remaining
-     * members into connected components produces multiple groups, each
-     * group becomes its own network.
-     */
-    @Nullable
-    public UUID onBlockRemoved(Level level, BlockPos pos, @Nullable UUID networkId) {
-        if (!(level instanceof ServerLevel serverLevel) || networkId == null) return null;
+    public void onBlockRemoved(Level level, BlockPos pos, @Nullable UUID networkId) {
+        if (!(level instanceof ServerLevel serverLevel) || networkId == null) return;
 
         StorageNetworkData data = getData(serverLevel);
 
@@ -109,44 +91,71 @@ public class StorageNetworkManager {
         if (previousMembers.isEmpty()) {
             data.deleteNetwork(networkId);
             LOGGER.debug("Network {} deleted after removing last block at {}", networkId, pos);
-            return null;
+            return;
         }
 
-        // Find connected groups among remaining members (pure connectivity, no controller dependency)
-        List<Set<BlockPos>> groups = findConnectedGroups(level, previousMembers);
+        List<Set<BlockPos>> groups = findConnectedGroups(previousMembers);
 
         if (groups.size() == 1) {
-            // Network is still connected — nothing to split
-            return networkId;
+            return;
         }
 
         // Multiple groups → keep the first group with the old networkId,
         // create new networks for the rest
-        Set<BlockPos> keepGroup = groups.get(0);
-        // The keep group already has the old networkId in blockToNetwork
-        // (they weren't removed from it)
-
         for (int i = 1; i < groups.size(); i++) {
             Set<BlockPos> group = groups.get(i);
             UUID newId = data.createNetwork();
             for (BlockPos memberPos : group) {
-                data.removeFromNetwork(memberPos); // remove from old
+                data.removeFromNetwork(memberPos);
                 data.addToNetwork(newId, memberPos);
                 updateComponentId(level, memberPos, newId);
             }
             LOGGER.debug("Split off new network {} with {} members from network {}",
                     newId, group.size(), networkId);
         }
-
-        return networkId;
     }
 
     // ========== Network Registration ==========
 
-    public void registerComponent(ServerLevel level, BlockPos pos, UUID networkId) {
+    /**
+     * Register a component with the persisted network data.
+     * <p>
+     * {@link StorageNetworkData} is the authoritative source of network membership.
+     * If this position already exists in the SavedData (e.g. after a merge or split
+     * while this chunk was unloaded), the BE's stored UUID is treated as stale and
+     * overwritten with the SavedData's UUID. The BE's NBT UUID serves only as a
+     * migration hint when the position is not yet in SavedData.
+     */
+    public void registerComponent(ServerLevel level, BlockPos pos, UUID networkIdFromBE) {
         StorageNetworkData data = getData(level);
-        data.createNetwork(networkId);
-        data.addToNetwork(networkId, pos);
+        UUID savedId = data.getNetworkId(pos);
+
+        if (savedId != null) {
+            // SavedData already has this position — it is authoritative.
+            if (!savedId.equals(networkIdFromBE)) {
+                LOGGER.debug("BE at {} has stale networkId {}; correcting to persisted {}",
+                        pos, networkIdFromBE, savedId);
+                updateComponentId(level, pos, savedId);
+            }
+            return;
+        }
+
+        // Position not in SavedData yet — register with the BE's UUID.
+        data.createNetwork(networkIdFromBE);
+        data.addToNetwork(networkIdFromBE, pos);
+
+        // Check if this registration bridges adjacent networks that should be merged.
+        Set<UUID> adjacentIds = data.findAllAdjacentNetworks(pos);
+        for (UUID adjId : adjacentIds) {
+            if (!adjId.equals(networkIdFromBE)) {
+                Set<BlockPos> mergedMembers = data.mergeNetworks(adjId, networkIdFromBE);
+                for (BlockPos memberPos : mergedMembers) {
+                    updateComponentId(level, memberPos, networkIdFromBE);
+                }
+                LOGGER.debug("registerComponent at {} merged adjacent network {} ({} members) into {}",
+                        pos, adjId, mergedMembers.size(), networkIdFromBE);
+            }
+        }
     }
 
     private void updateComponentId(Level level, BlockPos pos, UUID newId) {
@@ -159,7 +168,7 @@ public class StorageNetworkManager {
 
     // ========== BFS Utilities ==========
 
-    private Set<BlockPos> bfsConnected(Level level, BlockPos startPos, Set<BlockPos> candidates) {
+    private static Set<BlockPos> bfsConnected(BlockPos startPos, Set<BlockPos> candidates) {
         Set<BlockPos> visited = new LinkedHashSet<>();
         Queue<BlockPos> queue = new ArrayDeque<>();
         visited.add(startPos);
@@ -178,13 +187,13 @@ public class StorageNetworkManager {
         return visited;
     }
 
-    private List<Set<BlockPos>> findConnectedGroups(Level level, Set<BlockPos> positions) {
+    private static List<Set<BlockPos>> findConnectedGroups(Set<BlockPos> positions) {
         List<Set<BlockPos>> groups = new ArrayList<>();
         Set<BlockPos> remaining = new HashSet<>(positions);
 
         while (!remaining.isEmpty()) {
             BlockPos start = remaining.iterator().next();
-            Set<BlockPos> group = bfsConnected(level, start, remaining);
+            Set<BlockPos> group = bfsConnected(start, remaining);
             groups.add(group);
             remaining.removeAll(group);
         }

@@ -15,15 +15,6 @@ import org.slf4j.Logger;
 
 /**
  * Create: Storage Extended — a server-side companion mod for Create: Storage (fxntstorage).
- * <p>
- * This mod replaces the original BFS-based storage network discovery with a persistent,
- * event-driven system. Key features:
- * <ul>
- *   <li>Persistent network topology via {@code StorageNetworkData} (World SavedData).</li>
- *   <li>Unique UUID per storage network for O(1) component lookup.</li>
- *   <li>Event-driven network updates: block place triggers join/merge, block break triggers split.</li>
- *   <li>"Unloaded can update": network data persists independently of chunk loading.</li>
- * </ul>
  */
 @Mod(CreateStorageExtended.MOD_ID)
 public class CreateStorageExtended {
@@ -32,8 +23,8 @@ public class CreateStorageExtended {
     private static final Logger LOGGER = LogUtils.getLogger();
 
     public CreateStorageExtended(IEventBus modEventBus, ModContainer modContainer) {
-        // Register config
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        Config.register(modEventBus);
 
         // Register ourselves on the Forge event bus
         NeoForge.EVENT_BUS.register(this);

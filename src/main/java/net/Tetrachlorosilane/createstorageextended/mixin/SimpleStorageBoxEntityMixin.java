@@ -3,8 +3,6 @@ package net.Tetrachlorosilane.createstorageextended.mixin;
 import net.Tetrachlorosilane.createstorageextended.network.INetworkComponent;
 import net.Tetrachlorosilane.createstorageextended.network.StorageNetworkManager;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.HolderLookup;
-import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -20,10 +18,7 @@ import java.util.UUID;
 
 /**
  * Mixin into SimpleStorageBoxEntity to implement {@link INetworkComponent}.
- * <p>
- * Since SimpleStorageBoxEntity DOES override saveAdditional/loadAdditional,
- * the NBT injection is kept here. For other network components that don't
- * override these methods, see {@link BlockEntityNetworkMixin}.
+ * NBT persistence is handled by {@link BlockEntityNetworkMixin}.
  */
 @Mixin(targets = "net.fxnt.fxntstorage.simple_storage.SimpleStorageBoxEntity", remap = false)
 public abstract class SimpleStorageBoxEntityMixin implements INetworkComponent {
@@ -45,26 +40,6 @@ public abstract class SimpleStorageBoxEntityMixin implements INetworkComponent {
     @Override
     public BlockPos getComponentPos() {
         return ((BlockEntity) (Object) this).getBlockPos();
-    }
-
-    @Inject(method = "saveAdditional", at = @At("TAIL"), remap = false)
-    private void onSaveAdditional(CompoundTag tag, HolderLookup.Provider registries, CallbackInfo ci) {
-        if (createstorageextended$networkId != null) {
-            tag.putUUID("StorageNetworkId", createstorageextended$networkId);
-        }
-    }
-
-    @Inject(method = "loadAdditional", at = @At("TAIL"), remap = false)
-    private void onLoadAdditional(CompoundTag tag, HolderLookup.Provider registries, CallbackInfo ci) {
-        if (tag.hasUUID("StorageNetworkId")) {
-            createstorageextended$networkId = tag.getUUID("StorageNetworkId");
-
-            BlockEntity self = (BlockEntity) (Object) this;
-            if (self.getLevel() instanceof ServerLevel serverLevel) {
-                StorageNetworkManager.getInstance().registerComponent(
-                        serverLevel, self.getBlockPos(), createstorageextended$networkId);
-            }
-        }
     }
 
     @Inject(method = "serverTick", at = @At("HEAD"), remap = false)

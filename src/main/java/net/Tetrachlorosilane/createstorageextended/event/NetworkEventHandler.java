@@ -60,7 +60,7 @@ public class NetworkEventHandler {
 
         if (isNetworkBlock) {
             UUID newId = StorageNetworkManager.getInstance()
-                    .onBlockPlaced(serverLevel, pos, event.getState(), existingId);
+                    .onBlockPlaced(serverLevel, pos, existingId);
 
             if (newId != null && be instanceof INetworkComponent component) {
                 component.setStorageNetworkId(newId);
@@ -86,3 +86,4 @@ public class NetworkEventHandler {
         }
     }
 }
+
