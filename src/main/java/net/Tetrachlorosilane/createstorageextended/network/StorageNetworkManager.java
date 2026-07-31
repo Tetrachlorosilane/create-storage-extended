@@ -1,6 +1,7 @@
 package net.Tetrachlorosilane.createstorageextended.network;
 
 import com.mojang.logging.LogUtils;
+import net.Tetrachlorosilane.createstorageextended.Config;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
@@ -52,10 +53,10 @@ public class StorageNetworkManager {
             } else {
                 targetId = data.createNetwork();
             }
-            LOGGER.debug("Created new network {} for block at {}", targetId, pos);
+            if (Config.debugLogging) LOGGER.debug("Created new network {} for block at {}", targetId, pos);
         } else if (adjacentIds.size() == 1) {
             targetId = adjacentIds.iterator().next();
-            LOGGER.debug("Block at {} joining existing network {}", pos, targetId);
+            if (Config.debugLogging) LOGGER.debug("Block at {} joining existing network {}", pos, targetId);
         } else {
             // Multiple adjacent networks: merge them all into the first one
             Iterator<UUID> iter = adjacentIds.iterator();
@@ -67,7 +68,7 @@ public class StorageNetworkManager {
                     for (BlockPos memberPos : mergedMembers) {
                         updateComponentId(level, memberPos, targetId);
                     }
-                    LOGGER.debug("Merged network {} ({} members) into {} at block placement {}",
+                    if (Config.debugLogging) LOGGER.debug("Merged network {} ({} members) into {} at block placement {}",
                             otherId, mergedMembers.size(), targetId, pos);
                 }
             }
@@ -90,7 +91,7 @@ public class StorageNetworkManager {
 
         if (previousMembers.isEmpty()) {
             data.deleteNetwork(networkId);
-            LOGGER.debug("Network {} deleted after removing last block at {}", networkId, pos);
+            if (Config.debugLogging) LOGGER.debug("Network {} deleted after removing last block at {}", networkId, pos);
             return;
         }
 
@@ -100,7 +101,7 @@ public class StorageNetworkManager {
             return;
         }
 
-        // Multiple groups → keep the first group with the old networkId,
+        // Multiple groups -> keep the first group with the old networkId,
         // create new networks for the rest
         for (int i = 1; i < groups.size(); i++) {
             Set<BlockPos> group = groups.get(i);
@@ -110,7 +111,7 @@ public class StorageNetworkManager {
                 data.addToNetwork(newId, memberPos);
                 updateComponentId(level, memberPos, newId);
             }
-            LOGGER.debug("Split off new network {} with {} members from network {}",
+            if (Config.debugLogging) LOGGER.debug("Split off new network {} with {} members from network {}",
                     newId, group.size(), networkId);
         }
     }
@@ -131,16 +132,16 @@ public class StorageNetworkManager {
         UUID savedId = data.getNetworkId(pos);
 
         if (savedId != null) {
-            // SavedData already has this position — it is authoritative.
+            // SavedData already has this position - it is authoritative.
             if (!savedId.equals(networkIdFromBE)) {
-                LOGGER.debug("BE at {} has stale networkId {}; correcting to persisted {}",
+                if (Config.debugLogging) LOGGER.debug("BE at {} has stale networkId {}; correcting to persisted {}",
                         pos, networkIdFromBE, savedId);
                 updateComponentId(level, pos, savedId);
             }
             return;
         }
 
-        // Position not in SavedData yet — register with the BE's UUID.
+        // Position not in SavedData yet - register with the BE's UUID.
         data.createNetwork(networkIdFromBE);
         data.addToNetwork(networkIdFromBE, pos);
 
@@ -152,7 +153,7 @@ public class StorageNetworkManager {
                 for (BlockPos memberPos : mergedMembers) {
                     updateComponentId(level, memberPos, networkIdFromBE);
                 }
-                LOGGER.debug("registerComponent at {} merged adjacent network {} ({} members) into {}",
+                if (Config.debugLogging) LOGGER.debug("registerComponent at {} merged adjacent network {} ({} members) into {}",
                         pos, adjId, mergedMembers.size(), networkIdFromBE);
             }
         }
