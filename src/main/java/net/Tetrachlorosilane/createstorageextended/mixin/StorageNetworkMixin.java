@@ -18,9 +18,11 @@ import java.util.UUID;
 public abstract class StorageNetworkMixin {
 
     /**
-     * Replace BFS-based component discovery with persisted data lookup.
-     * Fetches the controller's networkId from its BE on every call, so splits
-     * and merges are reflected immediately without stale cached values.
+     * Replaces BFS-based component discovery with a lookup in the persisted
+     * topology. The controller's networkId is fetched from its BE on every
+     * call; the topology itself is kept up to date by the deferred tick pass
+     * in {@link StorageNetworkManager}, which resolves all changes since the
+     * previous tick in one order-independent pass.
      */
     @Inject(method = "getConnectedComponents", at = @At("HEAD"), cancellable = true, remap = false)
     private void onGetConnectedComponents(@Nullable Level level, BlockPos origin,
