@@ -8,10 +8,10 @@
 
 | Original (fxntstorage) | Extended |
 |---|---|
-| BFS rediscovery every 20 ticks | Event-driven: `Level.setBlock` hook catches all changes |
+| BFS rediscovery every 20 ticks | Event-driven: changes are recorded by a `Level.setBlock` hook and resolved in a deferred tick pass |
 | Network topology not saved | World `SavedData` persists full topology |
 | No unique network ID | Every network has a persistent `UUID` |
-| Controller-dependent topology | Pure connectivity — breaking a controller does not split |
+| Controller-dependent topology | Pure connectivity - breaking a controller does not split |
 | Interfaces hold direct Java refs | UUID-based lookup via `StorageNetworkManager` |
 | Chunk unload breaks references | SavedData independent of chunk loading |
 
@@ -31,15 +31,16 @@
 
 ```
 src/main/java/net/Tetrachlorosilane/createstorageextended/
-├── CreateStorageExtended.java          # Mod entry point
+├── CreateStorageExtended.java          # Mod entry point: tick pass, chunk-load cleanup, commands
 ├── Config.java                         # debugLogging toggle
 ├── network/
 │   ├── StorageNetworkData.java         # World SavedData (persisted topology)
-│   ├── StorageNetworkManager.java      # Singleton: place/remove/merge/split
+│   ├── StorageNetworkManager.java      # Singleton: change recording, tick pass, full rebuild
 │   └── INetworkComponent.java          # BE interface: get/setStorageNetworkId
 ├── mixin/
-│   ├── BlockEntityNetworkMixin.java    # Universal NBT persistence for all components
-│   ├── LevelSetBlockMixin.java         # Hooks Level.setBlock → handles ALL block changes
+│   ├── BlockEntityNetworkMixin.java    # Universal NBT persistence + registration for all components
+│   ├── ChunkMapAccessor.java           # Exposes ChunkMap.getChunks() for the rebuild command
+│   ├── LevelSetBlockMixin.java         # Records network-block changes from Level.setBlock
 │   ├── StorageControllerEntityMixin.java
 │   ├── StorageInterfaceEntityMixin.java
 │   ├── SimpleStorageBoxEntityMixin.java
@@ -49,28 +50,40 @@ src/main/java/net/Tetrachlorosilane/createstorageextended/
 ### Data Flow
 
 ```
-Block Placed ──→ Level.setBlock (old=air, new=network_block)
-                 └── LevelSetBlockMixin.onSetBlock
-                       └── StorageNetworkManager.onBlockPlaced → neighbor merge + join
+Block Placed / Removed / Replaced ──→ Level.setBlock
+                 └── LevelSetBlockMixin.onSetBlockReturn (success only)
+                       └── StorageNetworkManager.markChanged(pos)
 
-Block Removed ──→ Level.setBlock (old=network_block, new=air)
-                   └── LevelSetBlockMixin.onSetBlock
-                         └── StorageNetworkManager.onBlockRemoved → split detection
+Next server tick ──→ StorageNetworkManager.onServerTick
+                       └── resolveChanges(changed):
+                             removals → component convergence (merge/register)
+                                       → split detection → ghost/empty cleanup
 
-World Load ──→ BlockEntityNetworkMixin.loadAdditional → registerComponent
+Chunk Load ──→ BlockEntityNetworkMixin.loadAdditional → registerComponent
                └── SavedData authoritative check → corrects stale UUIDs
+            ──→ CreateStorageExtended.onChunkLoad → cleanupGhostsInChunk
 
 Network Query ──→ StorageNetworkMixin intercepts getConnectedComponents
-                   └── StorageNetworkManager.getNetworkMembers (O(1) from SavedData)
+                   └── StorageNetworkManager.getNetworkMembers (from SavedData)
 ```
 
 ### Key Behaviors
 
-- **Merges**: Block placed between two networks → `findAllAdjacentNetworks` detects both → merges all into one UUID → updates all affected BEs.
-- **Splits**: Block removed → `findConnectedGroups` runs pure positional BFS on remaining members → each disconnected group becomes its own network.
-- **Stale UUIDs**: When a chunk loads with an old NBT UUID, `registerComponent` checks `StorageNetworkData` first — SavedData is authoritative, BE is corrected.
-- **Empty networks**: Deleted when last member removed, skipped during save.
-- **Storage Trim**: Supported via `fxntstorage:storage_network_block` tag (no `INetworkComponent` needed — topology lives in SavedData).
+- **Order-independent bulk changes**: `setBlock` only records changed positions; all joins, merges, splits and cleanups happen in one pass at the next tick, computed from the final world state. Bulk placements can never stay split regardless of placement order.
+- **Merges**: a connected component that carries several network ids is merged into one; unregistered members are registered on the spot.
+- **Splits**: after a removal, any network whose members now span more than one physical component is split into one network per component.
+- **Ghost cleanup**: members whose position no longer holds a network block are removed; members stranded in unloaded chunks (e.g. after a large-scale move) are cleaned up when their chunk loads.
+- **Stale UUIDs**: when a chunk loads with an old NBT UUID, `registerComponent` checks `StorageNetworkData` first - SavedData is authoritative, BE is corrected.
+- **Empty networks**: deleted when the last member is removed, skipped during save.
+- **Storage Trim**: supported via the `fxntstorage:storage_network_block` tag (topology lives in SavedData).
+
+---
+
+## Commands
+
+| Command | Permission | Description |
+|---|---|---|
+| `/createstorageextended rebuildnetworks` | op (level 2) | Clears the persisted topology and rebuilds every network from the currently-loaded chunks. The scan is spread over several ticks so large worlds do not lag. Unloaded chunks are **not** force-loaded; their network blocks are re-registered automatically when the chunks load. |
 
 ---
 

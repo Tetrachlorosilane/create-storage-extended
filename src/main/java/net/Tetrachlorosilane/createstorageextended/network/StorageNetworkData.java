@@ -6,6 +6,8 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.TagKey;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.saveddata.SavedData;
 import org.jetbrains.annotations.Nullable;
 
@@ -70,14 +72,43 @@ public class StorageNetworkData extends SavedData {
         }
     }
 
-    public void deleteNetwork(UUID networkId) {
-        Set<BlockPos> members = networks.remove(networkId);
-        if (members != null) {
-            for (BlockPos pos : members) {
-                blockToNetwork.remove(pos);
+        /** Removes networks that no longer have any members. */
+    public void cleanupEmptyNetworks() {
+        boolean dirty = networks.values().removeIf(Set::isEmpty);
+        if (dirty) setDirty();
+    }
+
+    /**
+     * Removes persisted members inside the given chunk whose position no
+     * longer holds a network block. Called when the chunk loads, so members
+     * stranded in previously-unloaded chunks are cleaned up without ever
+     * force-loading them.
+     */
+    /**
+     * Removes every network and every membership. Used by the full rebuild
+     * command before rescanning the world.
+     */
+    public void clear() {
+        networks.clear();
+        blockToNetwork.clear();
+        setDirty();
+    }
+
+    public void cleanupGhostsInChunk(ServerLevel level, int chunkX, int chunkZ, TagKey<Block> networkBlockTag) {
+        boolean dirty = false;
+        for (Set<BlockPos> members : networks.values()) {
+            Iterator<BlockPos> it = members.iterator();
+            while (it.hasNext()) {
+                BlockPos pos = it.next();
+                if ((pos.getX() >> 4) != chunkX || (pos.getZ() >> 4) != chunkZ) continue;
+                if (!level.getBlockState(pos).is(networkBlockTag)) {
+                    it.remove();
+                    blockToNetwork.remove(pos);
+                    dirty = true;
+                }
             }
-            setDirty();
         }
+        if (dirty) setDirty();
     }
 
     public Set<BlockPos> mergeNetworks(UUID sourceId, UUID targetId) {
