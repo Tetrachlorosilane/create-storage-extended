@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "BlockEntityNetworkMixin",
+    "ChunkMapAccessor",
     "LevelSetBlockMixin",
     "StorageControllerEntityMixin",
     "StorageNetworkMixin",
