@@ -51,6 +51,9 @@ public class StorageNetworkManager {
     /** Chunks scanned per tick during a full rebuild (keeps the server responsive). */
     private static final int REBUILD_CHUNKS_PER_TICK = 64;
 
+    /** Cached direction array - {@code Direction.values()} allocates a fresh array on every call. */
+    private static final Direction[] DIRS = Direction.values();
+
     private final Map<ServerLevel, StorageNetworkData> dimensionData = new WeakHashMap<>();
     /** Positions whose block-state changed since the last settle pass. */
     private final Map<ServerLevel, Set<BlockPos>> pendingChanges = new WeakHashMap<>();
@@ -177,7 +180,7 @@ public class StorageNetworkManager {
             if (isNetworkBlock(level, pos)) {
                 starts.add(pos);
             } else {
-                for (Direction dir : Direction.values()) {
+                for (Direction dir : DIRS) {
                     BlockPos neighbor = pos.relative(dir);
                     if (isNetworkBlock(level, neighbor)) {
                         starts.add(neighbor);
@@ -193,18 +196,19 @@ public class StorageNetworkManager {
         // 3. Component convergence: every physical component becomes one
         //    network id; unregistered members are registered.
         Set<UUID> touchedNetworks = new HashSet<>();
-        Set<BlockPos> visited = new HashSet<>();
+        Set<Long> visited = new HashSet<>();
         for (BlockPos start : starts) {
-            if (visited.contains(start)) continue;
+            long startEnc = BlockPosEncoding.encode(start); if (!visited.add(startEnc)) continue;
 
-            Set<BlockPos> component = new HashSet<>();
+            Set<Long> component = new HashSet<>();
             Set<UUID> componentIds = new LinkedHashSet<>();
-            bfsComponent(level, start, component, componentIds, data);
+            bfsComponent(level, startEnc, component, componentIds, data);
             visited.addAll(component);
 
             if (componentIds.isEmpty()) {
                 UUID newId = data.createNetwork();
-                for (BlockPos pos : component) {
+                for (long encodedPos : component) {
+                    BlockPos pos = BlockPosEncoding.decode(encodedPos);
                     data.addToNetwork(newId, pos);
                     updateComponentId(level, pos, newId);
                 }
@@ -222,7 +226,8 @@ public class StorageNetworkManager {
                     if (Config.debugLogging) LOGGER.debug("Settle: merged network {} into {} at {}",
                             otherId, targetId, start);
                 }
-                for (BlockPos pos : component) {
+                for (long encodedPos : component) {
+                    BlockPos pos = BlockPosEncoding.decode(encodedPos);
                     UUID current = data.getNetworkId(pos);
                     if (current == null || !current.equals(targetId)) {
                         data.addToNetwork(targetId, pos);
@@ -266,13 +271,20 @@ public class StorageNetworkManager {
         members.removeIf(pos -> isGhost(level, pos));
         if (members.size() <= 1) return;
 
-        List<Set<BlockPos>> groups = findPhysicalGroups(level, members);
+        // Encode members once into longs; physical grouping runs entirely on longs.
+        Set<Long> encodedMembers = new HashSet<>(members.size());
+        for (BlockPos pos : members) {
+            encodedMembers.add(BlockPosEncoding.encode(pos));
+        }
+
+        List<Set<Long>> groups = findPhysicalGroups(level, encodedMembers);
         if (groups.size() <= 1) return;
 
         for (int i = 1; i < groups.size(); i++) {
-            Set<BlockPos> group = groups.get(i);
+            Set<Long> group = groups.get(i);
             UUID newId = data.createNetwork();
-            for (BlockPos pos : group) {
+            for (long encodedPos : group) {
+                BlockPos pos = BlockPosEncoding.decode(encodedPos);
                 data.removeFromNetwork(pos);
                 data.addToNetwork(newId, pos);
                 updateComponentId(level, pos, newId);
@@ -380,19 +392,20 @@ public class StorageNetworkManager {
 
     // ========== Helpers ==========
 
-    private static void bfsComponent(ServerLevel level, BlockPos start, Set<BlockPos> component,
+    private static void bfsComponent(ServerLevel level, long start, Set<Long> component,
                                      Set<UUID> componentIds, StorageNetworkData data) {
-        Queue<BlockPos> queue = new ArrayDeque<>();
+        Queue<Long> queue = new ArrayDeque<>();
         component.add(start);
         queue.add(start);
 
         while (!queue.isEmpty()) {
-            BlockPos current = queue.poll();
-            UUID id = data.getNetworkId(current);
+            long current = queue.poll();
+            UUID id = data.getNetworkId(BlockPosEncoding.decode(current));
             if (id != null) componentIds.add(id);
 
-            for (Direction dir : Direction.values()) {
-                BlockPos neighbor = current.relative(dir);
+            int cx = BlockPosEncoding.x(current), cy = BlockPosEncoding.y(current), cz = BlockPosEncoding.z(current);
+            for (Direction dir : DIRS) {
+                long neighbor = BlockPosEncoding.encode(cx + dir.getStepX(), cy + dir.getStepY(), cz + dir.getStepZ());
                 if (component.contains(neighbor)) continue;
                 if (!isNetworkBlock(level, neighbor)) continue;
                 component.add(neighbor);
@@ -401,23 +414,25 @@ public class StorageNetworkManager {
         }
     }
 
-    /** Physical connectivity grouping over the given members. */
-    private static List<Set<BlockPos>> findPhysicalGroups(ServerLevel level, Set<BlockPos> members) {
-        Set<BlockPos> remaining = new HashSet<>(members);
-        List<Set<BlockPos>> groups = new ArrayList<>();
+    /** Physical connectivity grouping over the given members. Runs entirely on encoded longs. */
+    private static List<Set<Long>> findPhysicalGroups(ServerLevel level, Set<Long> members) {
+        Set<Long> remaining = new HashSet<>(members);
+        List<Set<Long>> groups = new ArrayList<>();
 
         while (!remaining.isEmpty()) {
-            BlockPos start = remaining.iterator().next();
+            long start = remaining.iterator().next();
             remaining.remove(start);
-            Set<BlockPos> group = new HashSet<>();
-            Queue<BlockPos> queue = new ArrayDeque<>();
+            Set<Long> group = new HashSet<>();
+            Queue<Long> queue = new ArrayDeque<>();
             group.add(start);
             queue.add(start);
 
             while (!queue.isEmpty()) {
-                BlockPos current = queue.poll();
-                for (Direction dir : Direction.values()) {
-                    BlockPos neighbor = current.relative(dir);
+                long current = queue.poll();
+                int cx = BlockPosEncoding.x(current), cy = BlockPosEncoding.y(current), cz = BlockPosEncoding.z(current);
+                for (Direction dir : DIRS) {
+                    long neighbor = BlockPosEncoding.encode(cx + dir.getStepX(), cy + dir.getStepY(), cz + dir.getStepZ());
+                    // Member-set first (in-memory), world tag check second (only for candidates).
                     if (remaining.contains(neighbor) && isNetworkBlock(level, neighbor)) {
                         remaining.remove(neighbor);
                         group.add(neighbor);
@@ -441,6 +456,11 @@ public class StorageNetworkManager {
     private static boolean isNetworkBlock(Level level, BlockPos pos) {
         if (!level.isLoaded(pos)) return false;
         return level.getBlockState(pos).is(STORAGE_NETWORK_BLOCK_TAG);
+    }
+
+    /** {@link #isNetworkBlock(Level, BlockPos)} over an encoded coordinate. */
+    private static boolean isNetworkBlock(Level level, long encoded) {
+        return isNetworkBlock(level, BlockPosEncoding.decode(encoded));
     }
 
     /** A member whose loaded position no longer holds a network block (stale entry). */
