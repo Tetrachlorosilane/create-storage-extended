@@ -139,6 +139,15 @@ public class StorageNetworkManager {
     // ========== Tick Pass (incremental changes) ==========
 
     /**
+     * Whether any dimension has recorded changes to settle, or a full rebuild
+     * is running. Lets the tick handler skip the per-dimension pass entirely
+     * when there is nothing to do.
+     */
+    public boolean hasPendingWork() {
+        return !pendingChanges.isEmpty() || rebuildTask != null;
+    }
+
+    /**
      * Runs once per server tick. Resolves every change recorded since the
      * previous pass, and advances a running full rebuild.
      */
@@ -318,7 +327,7 @@ public class StorageNetworkManager {
         List<LevelChunk> chunks = new ArrayList<>();
         ServerChunkCache cache = level.getChunkSource();
         ChunkMap chunkMap = cache.chunkMap;
-        for (ChunkHolder holder : ((ChunkMapAccessor) (Object) chunkMap).createstorageextended$getChunks()) {
+        for (ChunkHolder holder : ((ChunkMapAccessor) chunkMap).createstorageextended$getChunks()) {
             LevelChunk chunk = holder.getTickingChunk();
             if (chunk != null) {
                 chunks.add(chunk);
