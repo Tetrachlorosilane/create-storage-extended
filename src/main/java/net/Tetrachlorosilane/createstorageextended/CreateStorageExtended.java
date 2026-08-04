@@ -57,8 +57,12 @@ public class CreateStorageExtended {
     public void onServerTick(ServerTickEvent.Post event) {
         // Settle pass: re-converge connected components changed during this
         // tick so bulk placements cannot leave split networks behind.
+        // Fast path: with no recorded changes and no rebuild running there is
+        // nothing to do - avoid the per-dimension iteration entirely.
+        StorageNetworkManager manager = StorageNetworkManager.getInstance();
+        if (!manager.hasPendingWork()) return;
         for (ServerLevel level : event.getServer().getAllLevels()) {
-            StorageNetworkManager.getInstance().onServerTick(level);
+            manager.onServerTick(level);
         }
     }
 

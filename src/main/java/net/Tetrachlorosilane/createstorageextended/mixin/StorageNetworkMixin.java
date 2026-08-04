@@ -1,5 +1,6 @@
 package net.Tetrachlorosilane.createstorageextended.mixin;
 
+import net.Tetrachlorosilane.createstorageextended.network.INetworkComponent;
 import net.Tetrachlorosilane.createstorageextended.network.StorageNetworkManager;
 import net.fxnt.fxntstorage.storage_network.StorageNetwork;
 import net.minecraft.core.BlockPos;
@@ -30,15 +31,9 @@ public abstract class StorageNetworkMixin {
         if (!(level instanceof ServerLevel serverLevel)) return;
 
         var be = serverLevel.getBlockEntity(origin);
-        if (be == null) return;
+        if (!(be instanceof INetworkComponent component)) return;
 
-        UUID networkId = null;
-        try {
-            var method = be.getClass().getMethod("getStorageNetworkId");
-            networkId = (UUID) method.invoke(be);
-        } catch (Exception ignored) {
-        }
-
+        UUID networkId = component.getStorageNetworkId();
         if (networkId == null) return; // fall through to original BFS
 
         Set<BlockPos> members = StorageNetworkManager.getInstance()

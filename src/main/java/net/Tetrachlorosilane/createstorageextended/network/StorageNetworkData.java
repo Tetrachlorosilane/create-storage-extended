@@ -4,6 +4,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.LongTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.TagKey;
@@ -27,6 +28,28 @@ public class StorageNetworkData extends SavedData {
     private final Map<UUID, Set<BlockPos>> networks = new HashMap<>();
     // block position -> network UUID (reverse lookup)
     private final Map<BlockPos, UUID> blockToNetwork = new HashMap<>();
+    /**
+     * Derived index: chunk key (x<<32|z) -> member positions. Keeps per-chunk
+     * ghost cleanup O(that chunk) instead of O(all members).
+     * <p>
+     * MAINTENANCE CONSTRAINT: this index is a projection of {@link #networks}
+     * (and {@link #blockToNetwork}); every path that adds or removes members
+     * MUST keep it in sync - currently {@link #addToNetwork},
+     * {@link #removeFromNetwork}, {@link #clear}, {@link #load} and
+     * {@link #cleanupGhostsInChunk}. {@link #mergeNetworks} needs no change
+     * because member positions do not move. If a new mutation path is added,
+     * update this index too, otherwise ghost cleanup silently stops covering
+     * the affected chunk.
+     */
+    private final Map<Long, Set<BlockPos>> chunkMembers = new HashMap<>();
+
+    private static long chunkKey(int chunkX, int chunkZ) {
+        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
+    }
+
+    private static long chunkKey(BlockPos pos) {
+        return chunkKey(pos.getX() >> 4, pos.getZ() >> 4);
+    }
 
     public static StorageNetworkData get(ServerLevel level) {
         return level.getDataStorage().computeIfAbsent(
@@ -58,6 +81,7 @@ public class StorageNetworkData extends SavedData {
 
         networks.computeIfAbsent(networkId, k -> new LinkedHashSet<>()).add(pos);
         blockToNetwork.put(pos, networkId);
+        chunkMembers.computeIfAbsent(chunkKey(pos), k -> new HashSet<>()).add(pos);
         setDirty();
     }
 
@@ -68,7 +92,19 @@ public class StorageNetworkData extends SavedData {
             if (members != null) {
                 members.remove(pos);
             }
+            removeChunkMember(pos);
             setDirty();
+        }
+    }
+
+    private void removeChunkMember(BlockPos pos) {
+        long key = chunkKey(pos);
+        Set<BlockPos> bucket = chunkMembers.get(key);
+        if (bucket != null) {
+            bucket.remove(pos);
+            if (bucket.isEmpty()) {
+                chunkMembers.remove(key);
+            }
         }
     }
 
@@ -91,22 +127,33 @@ public class StorageNetworkData extends SavedData {
     public void clear() {
         networks.clear();
         blockToNetwork.clear();
+        chunkMembers.clear();
         setDirty();
     }
 
     public void cleanupGhostsInChunk(ServerLevel level, int chunkX, int chunkZ, TagKey<Block> networkBlockTag) {
+        long key = chunkKey(chunkX, chunkZ);
+        Set<BlockPos> bucket = chunkMembers.get(key);
+        if (bucket == null || bucket.isEmpty()) return;
+
         boolean dirty = false;
-        for (Set<BlockPos> members : networks.values()) {
-            Iterator<BlockPos> it = members.iterator();
-            while (it.hasNext()) {
-                BlockPos pos = it.next();
-                if ((pos.getX() >> 4) != chunkX || (pos.getZ() >> 4) != chunkZ) continue;
-                if (!level.getBlockState(pos).is(networkBlockTag)) {
-                    it.remove();
-                    blockToNetwork.remove(pos);
-                    dirty = true;
+        Iterator<BlockPos> it = bucket.iterator();
+        while (it.hasNext()) {
+            BlockPos pos = it.next();
+            if (!level.getBlockState(pos).is(networkBlockTag)) {
+                it.remove();
+                UUID networkId = blockToNetwork.remove(pos);
+                if (networkId != null) {
+                    Set<BlockPos> members = networks.get(networkId);
+                    if (members != null) {
+                        members.remove(pos);
+                    }
                 }
+                dirty = true;
             }
+        }
+        if (bucket.isEmpty()) {
+            chunkMembers.remove(key);
         }
         if (dirty) setDirty();
     }
@@ -164,11 +211,7 @@ public class StorageNetworkData extends SavedData {
 
             ListTag posList = new ListTag();
             for (BlockPos pos : entry.getValue()) {
-                CompoundTag posTag = new CompoundTag();
-                posTag.putInt("X", pos.getX());
-                posTag.putInt("Y", pos.getY());
-                posTag.putInt("Z", pos.getZ());
-                posList.add(posTag);
+                posList.add(LongTag.valueOf(BlockPosEncoding.encode(pos)));
             }
             networkTag.put(KEY_POSITIONS, posList);
             networksList.add(networkTag);
@@ -186,19 +229,25 @@ public class StorageNetworkData extends SavedData {
             UUID id = networkTag.getUUID(KEY_ID);
 
             Set<BlockPos> positions = new LinkedHashSet<>();
-            ListTag posList = networkTag.getList(KEY_POSITIONS, Tag.TAG_COMPOUND);
+            ListTag posList = (networkTag.get(KEY_POSITIONS) instanceof ListTag list) ? list : new ListTag();
             for (int j = 0; j < posList.size(); j++) {
-                CompoundTag posTag = posList.getCompound(j);
-                positions.add(new BlockPos(
-                        posTag.getInt("X"),
-                        posTag.getInt("Y"),
-                        posTag.getInt("Z")
-                ));
+                Tag posTag = posList.get(j);
+                if (posTag instanceof LongTag longTag) {
+                    positions.add(BlockPosEncoding.decode(longTag.getAsLong()));
+                } else if (posTag instanceof CompoundTag legacyTag) {
+                    // Legacy format (pre-coordinate-packing): three ints X/Y/Z.
+                    positions.add(new BlockPos(
+                            legacyTag.getInt("X"),
+                            legacyTag.getInt("Y"),
+                            legacyTag.getInt("Z")
+                    ));
+                }
             }
 
             data.networks.put(id, positions);
             for (BlockPos pos : positions) {
                 data.blockToNetwork.put(pos, id);
+                data.chunkMembers.computeIfAbsent(chunkKey(pos), k -> new HashSet<>()).add(pos);
             }
         }
 

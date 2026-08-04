@@ -13,6 +13,8 @@
     "StorageInterfaceEntityMixin"
   ],
   "client": [
+    "SimpleStorageBoxEntityRendererMixin",
+    "StorageBoxEntityRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1
