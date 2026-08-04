@@ -42,8 +42,18 @@ public abstract class LevelSetBlockMixin {
     private static final TagKey<Block> STORAGE_NETWORK_BLOCK_TAG =
             BlockTags.create(ResourceLocation.fromNamespaceAndPath("fxntstorage", "storage_network_block"));
 
+    /**
+     * Upper bound on re-entrant {@code setBlock} capture depth. Normal nesting
+     * (contraptions, structure generation) stays well below this; if it is
+     * ever reached it means a previous {@code setBlock} threw between HEAD and
+     * RETURN, leaking frames into the thread-local stack. Dropping the stale
+     * frames keeps the stack bounded instead of growing forever.
+     */
     @Unique
-    private final ThreadLocal<Deque<Boolean>> capturedOldNetStates = ThreadLocal.withInitial(ArrayDeque::new);
+    private static final int MAX_CAPTURE_DEPTH = 64;
+
+    @Unique
+    private final ThreadLocal<Deque<Boolean>> createstorageextended$capturedOldNetStates = ThreadLocal.withInitial(ArrayDeque::new);
 
     @Inject(method = "setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z",
             at = @At("HEAD"))
@@ -52,7 +62,11 @@ public abstract class LevelSetBlockMixin {
         if (self.isClientSide() || !(self instanceof ServerLevel)) return;
 
         // World state has not changed yet: this is the old block.
-        capturedOldNetStates.get().push(self.getBlockState(pos).is(STORAGE_NETWORK_BLOCK_TAG));
+        Deque<Boolean> stack = createstorageextended$capturedOldNetStates.get();
+        if (stack.size() >= MAX_CAPTURE_DEPTH) {
+            stack.clear(); // stale frames from a previous throw; reset
+        }
+        stack.push(self.getBlockState(pos).is(STORAGE_NETWORK_BLOCK_TAG));
     }
 
     @Inject(method = "setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z",
@@ -61,7 +75,7 @@ public abstract class LevelSetBlockMixin {
         Level self = (Level) (Object) this;
         if (self.isClientSide() || !(self instanceof ServerLevel serverLevel)) return;
 
-        Deque<Boolean> stack = capturedOldNetStates.get();
+        Deque<Boolean> stack = createstorageextended$capturedOldNetStates.get();
         Boolean oldIsNet = stack.poll();
         if (oldIsNet == null) return; // defensive; HEAD and RETURN pair 1:1
 
