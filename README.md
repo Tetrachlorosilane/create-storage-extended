@@ -57,7 +57,7 @@ src/main/java/net/Tetrachlorosilane/createstorageextended/
 ├── CreateStorageExtended.java          # Mod entry: tick pass, chunk-load cleanup, commands
 ├── Config.java                         # debugLogging toggle
 ├── client/
-│   └── RenderCulling.java              # Client occlusion test (full-cube check)
+│   └── RenderCulling.java              # Client culling: occlusion, behind-test, overlay distance
 ├── network/
 │   ├── StorageNetworkData.java         # World SavedData (persisted topology) + per-chunk index
 │   ├── StorageNetworkManager.java      # Singleton: change recording, tick pass, full rebuild
@@ -71,7 +71,7 @@ src/main/java/net/Tetrachlorosilane/createstorageextended/
     ├── StorageInterfaceEntityMixin.java
     ├── SimpleStorageBoxEntityMixin.java
     ├── StorageNetworkMixin.java        # Replaces BFS with SavedData lookup
-    ├── SimpleStorageBoxEntityRendererMixin.java   # Client: skip overlay when front occluded
+    ├── SimpleStorageBoxEntityRendererMixin.java   # Client: skip overlay (occluded / behind / far)
     └── StorageBoxEntityRendererMixin.java         # Client: same for the Storage Box
 ```
 
@@ -98,12 +98,14 @@ Network Query ──→ StorageNetworkMixin intercepts getConnectedComponents
 ### Client Rendering Flow
 
 ```
-Box adjacent to a fully opaque block
+For every storage-box BE:
   ├─ model: storage_box_base / storage_box_light overrides declare cullface
-  │         → hidden faces are never baked into the chunk mesh
-  └─ renderer: SimpleStorageBoxEntityRendererMixin / StorageBoxEntityRendererMixin
-              skip the front overlay (item icon, counts, pips)
-Both layers use the same full-cube occlusion predicate → no flicker, no floating text
+  │         → faces pressed against fully opaque neighbours are never baked
+  ├─ distance: beyond the overlay render distance (Create filterItemRenderDistance,
+  │            read lazily on first render) the whole BE render is skipped
+  ├─ occlusion: front neighbour fully opaque → overlay skipped
+  └─ behind: box facing away from the camera → overlay skipped
+Ponder scenes are exempt (overlay always shown, distance forced to 5)
 ```
 
 ### Key Behaviors
@@ -115,7 +117,7 @@ Both layers use the same full-cube occlusion predicate → no flicker, no floati
 - **Stale UUIDs**: when a chunk loads with an old NBT UUID, `registerComponent` checks `StorageNetworkData` first - SavedData is authoritative, BE is corrected.
 - **Empty networks**: deleted when the last member is removed, skipped during save.
 - **Storage Trim**: supported via the `fxntstorage:storage_network_block` tag (topology lives in SavedData).
-- **Client face culling**: any box face pressed against a fully opaque neighbour is not drawn — including the recessed front display and its status light. Culling is view-independent: it changes only with the world, never with the camera.
+- **Client overlay culling**: the front overlay is skipped when it cannot be seen — the box faces away from the camera (behind test), the front is pressed against a fully opaque neighbour (occlusion, same predicate as the model culler), or the box is beyond the overlay render distance (default: Create's `filterItemRenderDistance`, read lazily on first render). Ponder scenes are exempt.
 - **Bidirectional decoupling**: the server and client halves are independent; neither requires the other, and no version matching is enforced.
 - **Bounded capture stack**: the `Level.setBlock` capture stack self-heals after an exceptional unwind, so it can never grow unboundedly.
 
@@ -136,6 +138,7 @@ Notes:
 
 - Affects both Simple Storage Boxes (12 wood variants) and Storage Boxes (7 variants) — they share the `storage_box_base` model.
 - The overlay skip uses the same occlusion predicate as the model culler, so the two layers always agree.
+- The overlay is skipped in three situations: beyond the overlay render distance (threshold = Create `filterItemRenderDistance` squared, read lazily on first render and cached - changing the config requires a restart), front neighbour fully opaque, or box facing away from the camera (behind test). Ponder scenes are always exempt.
 - **Version coupling note**: the overrides replace the upstream model files wholesale. If a future fxntstorage release changes the box geometry, the overrides must be updated in lockstep.
 
 ---
