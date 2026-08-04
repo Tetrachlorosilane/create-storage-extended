@@ -13,7 +13,6 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.level.ChunkEvent;
-import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import org.slf4j.Logger;
@@ -35,11 +34,6 @@ public class CreateStorageExtended {
         NeoForge.EVENT_BUS.register(this);
 
         LOGGER.info("Create: Storage Extended - Persistent Storage Networks loaded.");
-    }
-
-    @SubscribeEvent
-    public void onServerStarted(ServerStartedEvent event) {
-        LOGGER.info("Create: Storage Extended - Server started. Network manager ready.");
     }
 
     @SubscribeEvent
