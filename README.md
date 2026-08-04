@@ -70,7 +70,7 @@ src/main/java/net/Tetrachlorosilane/createstorageextended/
     ├── StorageControllerEntityMixin.java
     ├── StorageInterfaceEntityMixin.java
     ├── SimpleStorageBoxEntityMixin.java
-    ├── StorageNetworkMixin.java        # Replaces BFS with SavedData lookup
+    ├── StorageNetworkMixin.java        # SavedData lookup + item→box index (fast target lookup)
     ├── SimpleStorageBoxEntityRendererMixin.java   # Client: skip overlay (occluded / behind / far)
     └── StorageBoxEntityRendererMixin.java         # Client: same for the Storage Box
 ```
@@ -93,6 +93,9 @@ Chunk Load ──→ BlockEntityNetworkMixin.loadAdditional → registerComponen
 
 Network Query ──→ StorageNetworkMixin intercepts getConnectedComponents
                    └── StorageNetworkManager.getNetworkMembers (from SavedData)
+
+Item Insert ──→ StorageNetwork.findBestTargetBox uses the item→box index
+                 └── O(candidate boxes) instead of O(all boxes); candidates re-verified live
 ```
 
 ### Client Rendering Flow
@@ -117,6 +120,7 @@ Ponder scenes are exempt (overlay always shown, distance forced to 5)
 - **Stale UUIDs**: when a chunk loads with an old NBT UUID, `registerComponent` checks `StorageNetworkData` first - SavedData is authoritative, BE is corrected.
 - **Empty networks**: deleted when the last member is removed, skipped during save.
 - **Storage Trim**: supported via the `fxntstorage:storage_network_block` tag (topology lives in SavedData).
+- **Indexed target-box lookup**: the controller's network keeps an item→box multimap, rebuilt together with the network table. Inserting an item, `canPlaceItem` and `isItemValid` therefore find the target box in O(candidate boxes) instead of scanning every box of the network; candidates are re-verified in real time so a stale index can never cause a wrong match.
 - **Client overlay culling**: the front overlay is skipped when it cannot be seen — the box faces away from the camera (behind test), the front is pressed against a fully opaque neighbour (occlusion, same predicate as the model culler), or the box is beyond the overlay render distance (default: Create's `filterItemRenderDistance`, read lazily on first render). Ponder scenes are exempt.
 - **Bidirectional decoupling**: the server and client halves are independent; neither requires the other, and no version matching is enforced.
 - **Bounded capture stack**: the `Level.setBlock` capture stack self-heals after an exceptional unwind, so it can never grow unboundedly.
