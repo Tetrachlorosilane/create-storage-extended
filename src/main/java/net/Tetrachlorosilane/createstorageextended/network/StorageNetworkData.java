@@ -24,6 +24,14 @@ public class StorageNetworkData extends SavedData {
     private static final String KEY_ID = "Id";
     private static final String KEY_POSITIONS = "Positions";
 
+    /**
+     * Monotonic topology revision, incremented on every mutation. Lets the
+     * upstream network objects skip their per-tick box validation entirely
+     * while nothing changed (see StorageNetworkMixin) instead of scanning the
+     * whole box list every tick.
+     */
+    private int revision;
+
     // network UUID -> all member block positions
     private final Map<UUID, Set<BlockPos>> networks = new HashMap<>();
     // block position -> network UUID (reverse lookup)
@@ -56,6 +64,37 @@ public class StorageNetworkData extends SavedData {
                 new Factory<>(StorageNetworkData::new, StorageNetworkData::load, null),
                 DATA_NAME
         );
+    }
+
+    /**
+     * Every topology mutation goes through {@link #setDirty()}, so bumping the
+     * revision here keeps it in sync with all add/remove/merge/clear/cleanup
+     * paths without having to remember each call site. Loading from NBT does
+     * not call {@code setDirty()}, so a freshly loaded world starts at 0.
+     */
+    @Override
+    public void setDirty() {
+        revision++;
+        super.setDirty();
+    }
+
+    /** Current topology revision; changes whenever any network membership changed. */
+    public int getRevision() {
+        return revision;
+    }
+
+    /**
+     * Notifies observers that load-state changed without a topology mutation
+     * (chunk loaded/unloaded): the set of <em>loaded</em> members of a network
+     * changed, which the upstream network objects must re-evaluate.
+     */
+    public void bumpRevision() {
+        revision++;
+    }
+
+    /** Whether any persisted member lies inside the given chunk. */
+    public boolean hasMembersInChunk(int chunkX, int chunkZ) {
+        return chunkMembers.containsKey(chunkKey(chunkX, chunkZ));
     }
 
     // ========== Network CRUD ==========

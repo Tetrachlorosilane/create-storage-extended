@@ -83,6 +83,15 @@ public class StorageNetworkManager {
         }
     }
 
+    /**
+     * Current topology revision of the dimension. Bumped on every network
+     * membership change and on chunk load/unload (the set of <em>loaded</em>
+     * members is what the upstream network objects can actually use).
+     */
+    public int getTopologyRevision(ServerLevel level) {
+        return getData(level).getRevision();
+    }
+
     // ========== Change Recording (from Level.setBlock) ==========
 
     /**
@@ -259,26 +268,45 @@ public class StorageNetworkManager {
 
         // 4. Splits: any touched network whose members now occupy more than
         //    one physical component is split into one network per component.
+        Set<BlockPos> splitOffPositions = new HashSet<>();
         for (UUID networkId : touchedNetworks) {
-            splitIfDisconnected(level, data, networkId);
+            splitOffPositions.addAll(splitIfDisconnected(level, data, networkId));
         }
 
         // 5. Cleanup empty networks (e.g. after removals).
         data.cleanupEmptyNetworks();
+
+        // 6. Reconcile Storage Interface bindings. Every network id is final
+        //    now, so drop any controller reference that no longer belongs to
+        //    the interface's network (split-off members keep their new id and
+        //    are therefore no longer members of any touched network). The
+        //    dropped reference invalidates the position's capabilities, so
+        //    cached external handlers immediately lose access to the old
+        //    network - without this, an interface physically disconnected from
+        //    its controller would keep serving the old network's item handler.
+        for (UUID networkId : touchedNetworks) {
+            for (BlockPos pos : data.getNetworkMembers(networkId)) {
+                StorageNetworkSync.reconcileController(level, pos);
+            }
+        }
+        for (BlockPos pos : splitOffPositions) {
+            StorageNetworkSync.reconcileController(level, pos);
+        }
     }
 
     /**
      * If the members of {@code networkId} are physically disconnected, keep the
      * first component on the original id and assign a fresh id to every other
-     * component.
+     * component. Returns the positions whose id was reassigned, so the caller
+     * can reconcile their block-entity state after the pass.
      */
-    private static void splitIfDisconnected(ServerLevel level, StorageNetworkData data, UUID networkId) {
+    private static Set<BlockPos> splitIfDisconnected(ServerLevel level, StorageNetworkData data, UUID networkId) {
         Set<BlockPos> members = new HashSet<>(data.getNetworkMembers(networkId));
-        if (members.size() <= 1) return;
+        if (members.size() <= 1) return Set.of();
 
         // Drop ghost members: loaded positions that are no longer network blocks.
         members.removeIf(pos -> isGhost(level, pos));
-        if (members.size() <= 1) return;
+        if (members.size() <= 1) return Set.of();
 
         // Encode members once into longs; physical grouping runs entirely on longs.
         Set<Long> encodedMembers = new HashSet<>(members.size());
@@ -287,8 +315,9 @@ public class StorageNetworkManager {
         }
 
         List<Set<Long>> groups = findPhysicalGroups(level, encodedMembers);
-        if (groups.size() <= 1) return;
+        if (groups.size() <= 1) return Set.of();
 
+        Set<BlockPos> reIded = new HashSet<>();
         for (int i = 1; i < groups.size(); i++) {
             Set<Long> group = groups.get(i);
             UUID newId = data.createNetwork();
@@ -297,10 +326,12 @@ public class StorageNetworkManager {
                 data.removeFromNetwork(pos);
                 data.addToNetwork(newId, pos);
                 updateComponentId(level, pos, newId);
+                reIded.add(pos);
             }
             if (Config.debugLogging) LOGGER.debug("Settle: split {} members off network {} as new network {}",
                     group.size(), networkId, newId);
         }
+        return reIded;
     }
 
     // ========== Full Rebuild (command) ==========
@@ -393,10 +424,31 @@ public class StorageNetworkManager {
      * Called when a chunk loads. Cleans up persisted members inside that chunk
      * whose position no longer holds a network block, so members stranded in
      * unloaded chunks (e.g. after a large-scale block move) are eventually
-     * removed without ever force-loading their chunk.
+     * removed without ever force-loading their chunk. Also bumps the topology
+     * revision when the chunk holds network members: the upstream network
+     * objects filtered them out while the chunk was unloaded and must re-add
+     * them now that they are usable again.
      */
     public void onChunkLoad(ServerLevel level, int chunkX, int chunkZ) {
-        getData(level).cleanupGhostsInChunk(level, chunkX, chunkZ, STORAGE_NETWORK_BLOCK_TAG);
+        StorageNetworkData data = getData(level);
+        data.cleanupGhostsInChunk(level, chunkX, chunkZ, STORAGE_NETWORK_BLOCK_TAG);
+        if (data.hasMembersInChunk(chunkX, chunkZ)) {
+            data.bumpRevision();
+        }
+    }
+
+    /**
+     * Called when a chunk unloads. Members inside it become unavailable to the
+     * upstream network objects (only loaded positions are usable), so bump the
+     * topology revision to make them re-evaluate their box/component lists.
+     * Only chunks that actually hold network members trigger a bump, so chunks
+     * unrelated to any network do not disturb the controllers.
+     */
+    public void onChunkUnload(ServerLevel level, int chunkX, int chunkZ) {
+        StorageNetworkData data = getData(level);
+        if (data.hasMembersInChunk(chunkX, chunkZ)) {
+            data.bumpRevision();
+        }
     }
 
     // ========== Helpers ==========
@@ -479,6 +531,10 @@ public class StorageNetworkManager {
     }
 
     private static void updateComponentId(Level level, BlockPos pos, UUID newId) {
+        // Merges can move members across components that are not loaded; the
+        // block entity will be corrected by registerComponent when its chunk
+        // loads (SavedData is authoritative), so never force-load here.
+        if (!level.isLoaded(pos)) return;
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof INetworkComponent component) {
             component.setStorageNetworkId(newId);
