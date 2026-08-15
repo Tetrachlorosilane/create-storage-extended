@@ -61,6 +61,7 @@ src/main/java/net/Tetrachlorosilane/createstorageextended/
 ├── network/
 │   ├── StorageNetworkData.java         # World SavedData (persisted topology) + per-chunk index
 │   ├── StorageNetworkManager.java      # Singleton: change recording, tick pass, full rebuild
+│   ├── StorageNetworkSync.java         # Keeps StorageInterface.controller in sync with networkId
 │   ├── BlockPosEncoding.java           # Packed 64-bit coordinate codec (BFS + NBT)
 │   └── INetworkComponent.java          # BE interface: get/setStorageNetworkId
 └── mixin/
@@ -119,8 +120,11 @@ Ponder scenes are exempt (overlay always shown, distance forced to 5)
 - **Ghost cleanup**: members whose position no longer holds a network block are removed; members stranded in unloaded chunks (e.g. after a large-scale move) are cleaned up when their chunk loads — a per-chunk index keeps this O(that chunk) instead of O(all members).
 - **Stale UUIDs**: when a chunk loads with an old NBT UUID, `registerComponent` checks `StorageNetworkData` first - SavedData is authoritative, BE is corrected.
 - **Empty networks**: deleted when the last member is removed, skipped during save.
+- **Storage Interface bindings stay in sync**: the interface's `controller` reference is validated against the persisted topology after every merge/split/rebuild pass (and every tick as a safety net). A controller that no longer belongs to the interface's network is dropped and the position's capabilities are invalidated, so the interface - and any automation that cached its `IItemHandler` via `BlockCapability` - immediately loses access to the old network after a disconnect. (Upstream `forgetController` alone would leave cached handlers alive and `checkController` only verifies the controller block still exists.)
 - **Storage Trim**: supported via the `fxntstorage:storage_network_block` tag (topology lives in SavedData).
 - **Indexed target-box lookup**: the controller's network keeps an item→box multimap, rebuilt together with the network table. Inserting an item, `canPlaceItem` and `isItemValid` therefore find the target box in O(candidate boxes) instead of scanning every box of the network; candidates are re-verified in real time so a stale index can never cause a wrong match.
+- **Never force-load chunks**: the topology handed to the upstream network objects contains only *loaded* members (the upstream `getBoxes`/`checkBoxes` call `Level.getBlockEntity` per member, which on a server level force-loads chunks), every `getBlockEntity` in the upstream network code is routed through a load-safe gate, and `updateComponentId` skips unloaded positions. A network spanning unloaded chunks therefore no longer reloads them every tick/refresh.
+- **Per-tick scan elimination**: `StorageNetwork.checkBoxes` (an O(boxes) `getBlockEntity` scan the upstream code runs every tick per controller) is skipped entirely while the topology revision is unchanged; a revision counter in the SavedData is bumped on every membership change and on chunk load/unload, so the scan runs only when something actually changed.
 - **Client overlay culling**: the front overlay is skipped when it cannot be seen — the box faces away from the camera (behind test), the front is pressed against a fully opaque neighbour (occlusion, same predicate as the model culler), or the box is beyond the overlay render distance (default: Create's `filterItemRenderDistance`, read lazily on first render). Ponder scenes are exempt.
 - **Bidirectional decoupling**: the server and client halves are independent; neither requires the other, and no version matching is enforced.
 - **Bounded capture stack**: the `Level.setBlock` capture stack self-heals after an exceptional unwind, so it can never grow unboundedly.

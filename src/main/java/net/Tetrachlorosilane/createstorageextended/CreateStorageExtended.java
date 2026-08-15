@@ -72,6 +72,17 @@ public class CreateStorageExtended {
     }
 
     @SubscribeEvent
+    public void onChunkUnload(ChunkEvent.Unload event) {
+        // Members inside the unloaded chunk are no longer usable by the
+        // upstream network objects; let them re-evaluate their cached box /
+        // component lists instead of force-loading the chunk on the next tick.
+        if (event.getLevel() instanceof ServerLevel serverLevel) {
+            ChunkPos chunkPos = event.getChunk().getPos();
+            StorageNetworkManager.getInstance().onChunkUnload(serverLevel, chunkPos.x, chunkPos.z);
+        }
+    }
+
+    @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher().register(Commands.literal("createstorageextended")
                 .then(Commands.literal("rebuildnetworks")
